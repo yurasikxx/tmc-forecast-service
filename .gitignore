@@ -1,0 +1,16 @@
+.venv/
+venv/
+env/
+
+.idea/
+*.iml
+*.iws
+*.ipr
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+*.log
+.env
+.DS_Store
