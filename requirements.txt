@@ -4,4 +4,3 @@ statsmodels==0.14.3
 pandas==2.2.3
 numpy==2.1.1
 pydantic==2.9.2
-scikit-learn==1.5.2
