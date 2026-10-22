@@ -1,3 +1,4 @@
+from datetime import date
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
@@ -5,6 +6,7 @@ from pydantic import BaseModel, Field
 class ForecastRequest(BaseModel):
     history: List[float] = Field(..., min_length=1)
     steps: int = Field(default=12, ge=1, le=36)
+    start_date: Optional[date] = None
 
 
 class ForecastPoint(BaseModel):
@@ -12,6 +14,8 @@ class ForecastPoint(BaseModel):
     value: float
     lower_bound: float
     upper_bound: float
+    period_year: Optional[int] = None
+    period_month: Optional[int] = None
 
 
 class ForecastDiagnostics(BaseModel):

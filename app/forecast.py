@@ -1,4 +1,5 @@
 import warnings
+from datetime import date
 from typing import List, Optional
 
 import numpy as np
@@ -25,7 +26,8 @@ def generate_forecast(request: ForecastRequest) -> ForecastResponse:
     steps = int(request.steps)
 
     if len(history) < MIN_HISTORY:
-        return _simple_forecast(history, steps, "moving_average_insufficient_data")
+        return _simple_forecast(history, steps, "moving_average_insufficient_data",
+                                request.start_date)
 
     series = _to_monthly_series(history)
 
@@ -42,32 +44,40 @@ def generate_forecast(request: ForecastRequest) -> ForecastResponse:
             fit = model.fit(optimized=True)
 
         if not _is_valid_fit(fit):
-            return _simple_forecast(history, steps, "moving_average_fallback")
+            return _simple_forecast(history, steps, "moving_average_fallback",
+                                    request.start_date)
 
         mean = np.asarray(fit.forecast(steps), dtype=float)
-        ci = _bootstrap_conf_int(fit, steps)
+        ci = _bootstrap_conf_int(fit, series, steps)
 
         upper_cap = float(np.max(history)) * MAX_INTERVAL_FACTOR
         capped = False
         points: List[ForecastPoint] = []
 
+        start = request.start_date or _next_month(date.today())
+        y, m = start.year, start.month
+
         for i in range(steps):
             value = max(0.0, float(mean[i]))
             lo = max(0.0, float(ci[i][0]))
             hi = float(ci[i][1])
-
             if hi > upper_cap:
                 hi = upper_cap
                 capped = True
 
-            points.append(
-                ForecastPoint(
-                    step=i + 1,
-                    value=round(value, 2),
-                    lower_bound=round(lo, 2),
-                    upper_bound=round(hi, 2),
-                )
-            )
+            points.append(ForecastPoint(
+                step=i + 1,
+                value=round(value, 2),
+                lower_bound=round(lo, 2),
+                upper_bound=round(hi, 2),
+                period_year=y,
+                period_month=m,
+            ))
+
+            m += 1
+            if m > 12:
+                m = 1
+                y += 1
 
         diagnostics = _build_diagnostics(fit, series, capped)
         reliability = _compute_reliability(diagnostics, points)
@@ -80,7 +90,14 @@ def generate_forecast(request: ForecastRequest) -> ForecastResponse:
         )
 
     except Exception:
-        return _simple_forecast(history, steps, "moving_average_fallback")
+        return _simple_forecast(history, steps, "moving_average_fallback",
+                                request.start_date)
+
+
+def _next_month(d: date) -> date:
+    if d.month == 12:
+        return date(d.year + 1, 1, 1)
+    return date(d.year, d.month + 1, 1)
 
 
 def _to_monthly_series(history: np.ndarray) -> pd.Series:
@@ -105,7 +122,7 @@ def _is_valid_fit(fit) -> bool:
         return False
 
 
-def _bootstrap_conf_int(fit, steps: int) -> np.ndarray:
+def _bootstrap_conf_int(fit, series: pd.Series, steps: int) -> np.ndarray:
     resid = np.asarray(fit.resid, dtype=float)
     resid = resid[np.isfinite(resid)]
     mean_path = np.asarray(fit.forecast(steps), dtype=float)
@@ -158,14 +175,12 @@ def _build_diagnostics(fit, series: pd.Series, capped: bool) -> ForecastDiagnost
     )
 
 
-def _compute_reliability(
-        diagnostics: ForecastDiagnostics, points: List[ForecastPoint]
-) -> str:
+def _compute_reliability(diagnostics: ForecastDiagnostics,
+                         points: List[ForecastPoint]) -> str:
     lb_ok = (
             diagnostics.ljung_box_pvalue is not None
             and diagnostics.ljung_box_pvalue > 0.05
     )
-
     widths = [(p.upper_bound - p.lower_bound) / max(p.value, 1e-6) for p in points]
     avg_width = float(np.mean(widths)) if widths else 1.0
     width_ok = avg_width < 0.25
@@ -177,17 +192,27 @@ def _compute_reliability(
     return "low"
 
 
-def _simple_forecast(history: np.ndarray, steps: int, method_name: str) -> ForecastResponse:
+def _simple_forecast(history: np.ndarray, steps: int, method_name: str,
+                     start_date: Optional[date] = None) -> ForecastResponse:
     avg = float(np.mean(history)) if history.size > 0 else 0.0
-    points = [
-        ForecastPoint(
+
+    start = start_date or _next_month(date.today())
+    y, m = start.year, start.month
+    points = []
+    for i in range(steps):
+        points.append(ForecastPoint(
             step=i + 1,
             value=round(avg, 2),
             lower_bound=round(avg * 0.8, 2),
             upper_bound=round(avg * 1.2, 2),
-        )
-        for i in range(steps)
-    ]
+            period_year=y,
+            period_month=m,
+        ))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
     return ForecastResponse(
         forecast=points,
         method=method_name,
